@@ -97,15 +97,31 @@ module.exports = class BelongsToRelationGenerator extends (
     // this checks if the foreign key already exists, so the 2nd param should be foreignKeyName
     relationUtils.doesRelationExist(sourceClass, foreignKeyName);
 
+    const isPolymorphic = options.isPolymorphic;
+    const discriminatorName = options.polymorphicDiscriminator;
+    const isDefaultDiscriminator =
+      discriminatorName === utils.camelCase(options.relationName) + 'Type';
+
     const modelProperty = this.getBelongsTo(
       targetModel,
       relationName,
       defaultRelationName,
       foreignKeyName,
       fktype,
+      isPolymorphic,
+      isDefaultDiscriminator,
+      discriminatorName,
     );
 
     relationUtils.addProperty(sourceClass, modelProperty);
+
+    if (isPolymorphic) {
+      relationUtils.addProperty(sourceClass, {
+        name: discriminatorName,
+        type: 'string',
+      });
+    }
+
     const imports = relationUtils.getRequiredImports(targetModel, relationType);
     relationUtils.addRequiredImports(sourceFile, imports);
 
@@ -119,12 +135,25 @@ module.exports = class BelongsToRelationGenerator extends (
     defaultRelationName,
     foreignKeyName,
     fktype,
+    isPolymorphic,
+    isDefaultDiscriminator,
+    discriminatorName,
   ) {
+    const polymorphicTypeArg = isPolymorphic
+      ? 'polymorphic: ' +
+        (isDefaultDiscriminator
+          ? 'true'
+          : `{discriminator: '${discriminatorName}'}`)
+      : '';
     // checks if relation name is customized
     let relationDecorator = [
       {
         name: 'belongsTo',
-        arguments: [`() =>  ${className}`],
+        arguments: [
+          `() =>  ${className}${
+            isPolymorphic ? ', {' + polymorphicTypeArg + '}' : ''
+          }`,
+        ],
       },
     ];
     // already checked if the relation name is the same as the source key before
@@ -132,7 +161,11 @@ module.exports = class BelongsToRelationGenerator extends (
       relationDecorator = [
         {
           name: 'belongsTo',
-          arguments: [`() =>  ${className}, {name: '${relationName}'}`],
+          arguments: [
+            `() =>  ${className}, {name: '${relationName}'${
+              isPolymorphic ? ', ' + polymorphicTypeArg : ''
+            }}`,
+          ],
         },
       ];
     }
@@ -143,10 +176,15 @@ module.exports = class BelongsToRelationGenerator extends (
     };
   }
 
-  _getRepositoryRequiredImports(dstModelClassName, dstRepositoryClassName) {
+  _getRepositoryRequiredImports(
+    dstModelClassName,
+    dstRepositoryClassName,
+    isPolymorphic,
+  ) {
     const importsArray = super._getRepositoryRequiredImports(
       dstModelClassName,
       dstRepositoryClassName,
+      isPolymorphic,
     );
     importsArray.push({
       name: 'BelongsToAccessor',
@@ -175,13 +213,30 @@ module.exports = class BelongsToRelationGenerator extends (
 
   _addCreatorToRepositoryConstructor(classConstructor) {
     const relationName = this.artifactInfo.relationName;
-    const statement =
-      `this.${relationName} = ` +
-      `this.createBelongsToAccessorFor('` +
-      `${relationName}',` +
-      ` ${utils.camelCase(this.artifactInfo.dstRepositoryClassName)}` +
-      `Getter,);`;
-    classConstructor.insertStatements(1, statement);
+    if (this.artifactInfo.isPolymorphic) {
+      let getters = '{';
+      for (const submodel of this.artifactInfo.polymorphicSubclasses) {
+        getters =
+          getters +
+          `"${submodel}": ${utils.camelCase(
+            utils.toClassName(submodel) + 'Repository',
+          )}Getter, `;
+      }
+      getters = getters + '}';
+      const statement =
+        `this.${relationName} = ` +
+        `this.createBelongsToAccessorFor('${relationName}', ` +
+        `${getters});`;
+      classConstructor.insertStatements(1, statement);
+    } else {
+      const statement =
+        `this.${relationName} = ` +
+        `this.createBelongsToAccessorFor('` +
+        `${relationName}',` +
+        ` ${utils.camelCase(this.artifactInfo.dstRepositoryClassName)}` +
+        `Getter,);`;
+      classConstructor.insertStatements(1, statement);
+    }
   }
 
   _registerInclusionResolverForRelation(classConstructor, options) {

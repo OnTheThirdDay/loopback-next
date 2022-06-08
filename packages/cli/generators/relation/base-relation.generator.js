@@ -77,6 +77,7 @@ module.exports = class BaseRelationGenerator extends ArtifactGenerator {
     const imports = this._getRepositoryRequiredImports(
       options.destinationModel,
       this.artifactInfo.dstRepositoryClassName,
+      this.artifactInfo.isPolymorphic,
     );
 
     relationUtils.addRequiredImports(
@@ -103,28 +104,57 @@ module.exports = class BaseRelationGenerator extends ArtifactGenerator {
   }
 
   _addParametersToRepositoryConstructor(classConstructor) {
-    if (this._addThroughRepoToRepositoryConstructor) {
-      this._addThroughRepoToRepositoryConstructor(classConstructor);
-    }
-    const parameterName =
-      utils.camelCase(this.artifactInfo.dstRepositoryClassName) + 'Getter';
+    if (this.artifactInfo.isPolymorphic) {
+      for (const submodel of this.artifactInfo.polymorphicSubclasses) {
+        if (this._addThroughRepoToRepositoryConstructor) {
+          this._addThroughRepoToRepositoryConstructor(classConstructor);
+        }
+        const parameterName =
+          utils.camelCase(utils.toClassName(submodel) + 'Repository') +
+          'Getter';
 
-    if (relationUtils.doesParameterExist(classConstructor, parameterName)) {
-      // no need to check if the getter already exists
-      return;
-    }
+        if (relationUtils.doesParameterExist(classConstructor, parameterName)) {
+          // no need to check if the getter already exists
+          return;
+        }
+        classConstructor.addParameter({
+          decorators: [
+            {
+              name: 'repository.getter',
+              arguments: [
+                "'" + utils.toClassName(submodel) + 'Repository' + "'",
+              ],
+            },
+          ],
+          name: parameterName,
+          type: `Getter<EntityCrudRepository<${this.artifactInfo.dstModelClass}, typeof ${this.artifactInfo.dstModelClass}.prototype.id, ${this.artifactInfo.dstModelClass}Relations>>,`,
+          scope: ast.Scope.Protected,
+        });
+      }
+    } else {
+      if (this._addThroughRepoToRepositoryConstructor) {
+        this._addThroughRepoToRepositoryConstructor(classConstructor);
+      }
+      const parameterName =
+        utils.camelCase(this.artifactInfo.dstRepositoryClassName) + 'Getter';
 
-    classConstructor.addParameter({
-      decorators: [
-        {
-          name: 'repository.getter',
-          arguments: ["'" + this.artifactInfo.dstRepositoryClassName + "'"],
-        },
-      ],
-      name: parameterName,
-      type: 'Getter<' + this.artifactInfo.dstRepositoryClassName + '>,',
-      scope: ast.Scope.Protected,
-    });
+      if (relationUtils.doesParameterExist(classConstructor, parameterName)) {
+        // no need to check if the getter already exists
+        return;
+      }
+
+      classConstructor.addParameter({
+        decorators: [
+          {
+            name: 'repository.getter',
+            arguments: ["'" + this.artifactInfo.dstRepositoryClassName + "'"],
+          },
+        ],
+        name: parameterName,
+        type: 'Getter<' + this.artifactInfo.dstRepositoryClassName + '>,',
+        scope: ast.Scope.Protected,
+      });
+    }
   }
 
   _addCreatorToRepositoryConstructor(classConstructor) {
@@ -185,10 +215,19 @@ module.exports = class BaseRelationGenerator extends ArtifactGenerator {
 
     // relation configuration
     this.artifactInfo.relationName = options.relationName;
+
+    this.artifactInfo.isPolymorphic = options.isPolymorphic;
+    this.artifactInfo.polymorphicDiscriminator =
+      options.polymorphicDiscriminator;
+    this.artifactInfo.polymorphicSubclasses = options.polymorphicSubclasses;
   }
 
-  _getRepositoryRequiredImports(dstModelClassName, dstRepositoryClassName) {
-    return [
+  _getRepositoryRequiredImports(
+    dstModelClassName,
+    dstRepositoryClassName,
+    isPolymorphic,
+  ) {
+    const importsArray = [
       {
         name: dstModelClassName,
         module: '../models',
@@ -201,11 +240,27 @@ module.exports = class BaseRelationGenerator extends ArtifactGenerator {
         name: 'Getter',
         module: '@loopback/core',
       },
-      {
+    ];
+    if (isPolymorphic) {
+      importsArray.push(
+        ...[
+          {
+            name: dstModelClassName + 'Relations',
+            module: '../models',
+          },
+          {
+            name: 'EntityCrudRepository',
+            module: '@loopback/repository',
+          },
+        ],
+      );
+    } else {
+      importsArray.push({
         name: dstRepositoryClassName,
         module: `./${utils.toFileName(dstModelClassName)}.repository`,
-      },
-    ];
+      });
+    }
+    return importsArray;
   }
 
   _getRepositoryRelationPropertyName() {

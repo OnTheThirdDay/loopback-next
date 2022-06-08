@@ -87,6 +87,11 @@ module.exports = class HasOneRelationGenerator extends BaseRelationGenerator {
     const isDefaultForeignKey =
       foreignKeyName === utils.camelCase(options.sourceModel) + 'Id';
 
+    const isPolymorphic = options.isPolymorphic;
+    const discriminatorName = options.polymorphicDiscriminator;
+    const isDefaultDiscriminator =
+      discriminatorName === utils.camelCase(options.relationName) + 'Type';
+
     let modelProperty;
     const project = new relationUtils.AstLoopBackProject();
 
@@ -103,9 +108,20 @@ module.exports = class HasOneRelationGenerator extends BaseRelationGenerator {
       relationName,
       isDefaultForeignKey,
       foreignKeyName,
+      isPolymorphic,
+      isDefaultDiscriminator,
+      discriminatorName,
     );
 
     relationUtils.addProperty(sourceClass, modelProperty);
+
+    if (isPolymorphic) {
+      relationUtils.addProperty(sourceClass, {
+        name: discriminatorName,
+        type: 'string',
+      });
+    }
+
     const imports = relationUtils.getRequiredImports(targetModel, relationType);
 
     relationUtils.addRequiredImports(sourceFile, imports);
@@ -132,18 +148,40 @@ module.exports = class HasOneRelationGenerator extends BaseRelationGenerator {
     }
   }
 
-  getHasOne(className, relationName, isDefaultForeignKey, foreignKeyName) {
+  getHasOne(
+    className,
+    relationName,
+    isDefaultForeignKey,
+    foreignKeyName,
+    isPolymorphic,
+    isDefaultDiscriminator,
+    discriminatorName,
+  ) {
+    const polymorphicTypeArg = isPolymorphic
+      ? 'polymorphic: ' +
+        (isDefaultDiscriminator
+          ? 'true'
+          : `{discriminator: '${discriminatorName}'}`)
+      : '';
     let relationDecorator = [
       {
         name: 'hasOne',
-        arguments: [`() => ${className}, {keyTo: '${foreignKeyName}'}`],
+        arguments: [
+          `() => ${className}, {keyTo: '${foreignKeyName}'${
+            isPolymorphic ? ', ' + polymorphicTypeArg : ''
+          }}`,
+        ],
       },
     ];
     if (isDefaultForeignKey) {
       relationDecorator = [
         {
           name: 'hasOne',
-          arguments: [`() => ${className}`],
+          arguments: [
+            `() => ${className}${
+              isPolymorphic ? ', {' + polymorphicTypeArg + '}' : ''
+            }`,
+          ],
         },
       ];
     }
@@ -155,10 +193,15 @@ module.exports = class HasOneRelationGenerator extends BaseRelationGenerator {
     };
   }
 
-  _getRepositoryRequiredImports(dstModelClassName, dstRepositoryClassName) {
+  _getRepositoryRequiredImports(
+    dstModelClassName,
+    dstRepositoryClassName,
+    isPolymorphic,
+  ) {
     const importsArray = super._getRepositoryRequiredImports(
       dstModelClassName,
       dstRepositoryClassName,
+      isPolymorphic,
     );
     importsArray.push({
       name: 'HasOneRepositoryFactory',
@@ -181,11 +224,28 @@ module.exports = class HasOneRelationGenerator extends BaseRelationGenerator {
 
   _addCreatorToRepositoryConstructor(classConstructor) {
     const relationPropertyName = this._getRepositoryRelationPropertyName();
-    const statement =
-      `this.${relationPropertyName} = ` +
-      `this.createHasOneRepositoryFactoryFor('${relationPropertyName}', ` +
-      `${utils.camelCase(this.artifactInfo.dstRepositoryClassName)}Getter);`;
-    classConstructor.insertStatements(1, statement);
+    if (this.artifactInfo.isPolymorphic) {
+      let getters = '{';
+      for (const submodel of this.artifactInfo.polymorphicSubclasses) {
+        getters =
+          getters +
+          `"${submodel}": ${utils.camelCase(
+            utils.toClassName(submodel) + 'Repository',
+          )}Getter, `;
+      }
+      getters = getters + '}';
+      const statement =
+        `this.${relationPropertyName} = ` +
+        `this.createHasOneRepositoryFactoryFor('${relationPropertyName}', ` +
+        `${getters});`;
+      classConstructor.insertStatements(1, statement);
+    } else {
+      const statement =
+        `this.${relationPropertyName} = ` +
+        `this.createHasOneRepositoryFactoryFor('${relationPropertyName}', ` +
+        `${utils.camelCase(this.artifactInfo.dstRepositoryClassName)}Getter);`;
+      classConstructor.insertStatements(1, statement);
+    }
   }
 
   _registerInclusionResolverForRelation(classConstructor, options) {
